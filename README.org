@@ -43,9 +43,6 @@ except ImportError:
     )
 #+END_SRC
 
-#+RESULTS:
-: None
-
 The ~block_eval~ function has a similar signature to the standard ~eval~ function, optionally a block name can be specified which will be used as the ~filename~ argument in ~compile~ calls.
 #+BEGIN_SRC python :tangle block_eval.py
 def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
@@ -58,17 +55,19 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
     """
 #+END_SRC
 
-#+RESULTS:
-: None
-
-The parent frame is searched for global and local variable scope to fully emulate ~eval~ and falls back to the current frame using the standard functions ~globals~ and ~locals~ which should always work.. This is perhaps the hackiest part of the code, but is needed.
+The parent frame is searched for global and local variable scope to fully emulate ~eval~ and falls back to the current frame using the standard functions ~globals~ and ~locals~ which should always work. If ~ctypes~ is available, fast local scope access is disabled in the frame to force its update during evaluation. This is perhaps the hackiest part of the code, but is needed.
 #+BEGIN_SRC python :tangle block_eval.py
     # get scope in calling frame to truly emulate eval
     current_frame = inspect.currentframe()
     try:
         parent_frame = current_frame.f_back
         p_globals, p_locals = parent_frame.f_globals, parent_frame.f_locals
-    except AttributeError:      # cannot get that frame or its vars
+        # force an update of locals array from locals dict after evaluating in
+        # their frame by disabling optimization, this hack is from
+        # http://faster-cpython.readthedocs.org/mutable.html#local-variables
+        ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(parent_frame),
+                                              ctypes.c_int(0))
+    except:      # cannot get that frame or its vars
         p_globals, p_locals = locals(), globals() # these should always work
     finally:
         del current_frame       # otherwise might create reference cycle
@@ -78,9 +77,6 @@ The parent frame is searched for global and local variable scope to fully emulat
         p_locals = p_globals if locals_ is None else locals_
 #+END_SRC
 
-#+RESULTS:
-
-Finally, the AST of the code block is parsed and it is determined if the last statement is an expression. If it is, the code preceding it is evaluated in ~exec~ mode and then this last expression is evaluated with ~eval~ and the result returned. Otwerwise, the whole block is simply evaluated in ~exec~ mode, which always returns ~None~.
 #+BEGIN_SRC python :tangle block_eval.py
     # AST manipulation and evaluation
     code_ast = ast.parse(code_str)
@@ -95,26 +91,8 @@ Finally, the AST of the code block is parsed and it is determined if the last st
         final_code = compile(expr, block_name, 'eval')
     else:
         final_code = compile(code_ast, block_name, 'exec')
-    ret = eval(final_code, p_globals, p_locals)
+    return eval(final_code, p_globals, p_locals)
 #+END_SRC
-Before the result is returned, an update of the local variable scope in the parent frame is forced as evaluation in that frame alone may not immediately change the locals. This is bit of a hack, but should mostly work.
-#+BEGIN_SRC python :tangle block_eval.py
-    # force an update of locals array from locals dict after evaluating in them
-    # from http://faster-cpython.readthedocs.org/mutable.html#local-variables
-    frame = inspect.currentframe()
-    try:
-        ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame),
-                                              ctypes.c_int(0))
-    except:
-        warnings.warn(
-            "Cannot force update of local variables after evaluation.",
-            RuntimeWarning)
-    finally:
-        del frame
-    return ret
-#+END_SRC
-
-#+RESULTS:
 
 ** Test suite
 
@@ -128,17 +106,11 @@ from block_eval import block_eval
 class TestBlockEval(unittest.TestCase):
 #+END_SRC
 
-#+RESULTS:
-
-The ~block_eval~ function is first tested on a simple expression.
 #+BEGIN_SRC python :tangle test_block_eval.py
     def test_simple_expr(self):
         ret = block_eval("6 * 7")
         self.assertEqual(ret, 42)
 #+END_SRC
-
-#+RESULTS:
-: None
 
 Then the referencing of a local variable in a simple expression is tested.
 #+BEGIN_SRC python :tangle test_block_eval.py
@@ -148,9 +120,6 @@ Then the referencing of a local variable in a simple expression is tested.
         self.assertEqual(ret, 42)
 #+END_SRC
 
-#+RESULTS:
-: None
-
 Then a more complicated expression is tested.
 #+BEGIN_SRC python :tangle test_block_eval.py
     def test_complicated_expr(self):
@@ -158,9 +127,6 @@ Then a more complicated expression is tested.
         ret = block_eval("alpha.is_integer() is False")
         self.assertIs(ret, True)
 #+END_SRC
-
-#+RESULTS:
-: None
 
 A for loo block is tested, it should not return anything as the last statement is not an expression.
 #+BEGIN_SRC python :tangle test_block_eval.py
@@ -171,9 +137,6 @@ A for loo block is tested, it should not return anything as the last statement i
         """))
         self.assertIs(ret, None)
 #+END_SRC
-
-#+RESULTS:
-: None
 
 This final block returns a result as the last statement is an expression. Referencing varibales defined in the block is also tested.
 #+BEGIN_SRC python :tangle test_block_eval.py
@@ -187,7 +150,4 @@ This final block returns a result as the last statement is an expression. Refere
         self.assertEqual(ret, 6)
         self.assertEqual(f, ret)
 #+END_SRC
-
-#+RESULTS:
-: None
 

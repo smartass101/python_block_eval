@@ -23,7 +23,12 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
     try:
         parent_frame = current_frame.f_back
         p_globals, p_locals = parent_frame.f_globals, parent_frame.f_locals
-    except AttributeError:      # cannot get that frame or its vars
+        # force an update of locals array from locals dict after evaluating in
+        # their frame by disabling optimization, this hack is from
+        # http://faster-cpython.readthedocs.org/mutable.html#local-variables
+        ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(parent_frame),
+                                              ctypes.c_int(0))
+    except:      # cannot get that frame or its vars
         p_globals, p_locals = locals(), globals() # these should always work
     finally:
         del current_frame       # otherwise might create reference cycle
@@ -45,18 +50,4 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
         final_code = compile(expr, block_name, 'eval')
     else:
         final_code = compile(code_ast, block_name, 'exec')
-    ret = eval(final_code, p_globals, p_locals)
-
-    # force an update of locals array from locals dict after evaluating in them
-    # from http://faster-cpython.readthedocs.org/mutable.html#local-variables
-    frame = inspect.currentframe()
-    try:
-        ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame),
-                                              ctypes.c_int(0))
-    except:
-        warnings.warn(
-            "Cannot force update of local variables after evaluation.",
-            RuntimeWarning)
-    finally:
-        del frame
-    return ret
+    return eval(final_code, p_globals, p_locals)
