@@ -39,7 +39,7 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
     if isinstance(last_stmt, ast.Expr):
         del code_ast.body[-1]
         if len(code_ast.body) > 0:
-            eval(compile(code_ast, block_name, 'exec'), p_globals, p_locals)
+            exec(compile(code_ast, block_name, 'exec'), p_globals, p_locals)
             locals()            # update local symbol table after eval
         expr = ast.Expression(last_stmt.value)
         final_code = compile(expr, block_name, 'eval')
