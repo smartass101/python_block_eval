@@ -1,8 +1,15 @@
 import ast
 import inspect
 
-
 def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
+    """Evaluate a code (block) string and possibly return its result
+
+    The result is the result of the last statement if it is an expression. This
+    function is a compromise between exec and eval: It evaluates all the
+    statements like exec, but uses eval for the last statement if it is an
+    expression and returns its value. If it is not, None is returned (exec mode)
+    """
+
     # get scope in calling frame to truly emulate eval
     current_frame = inspect.currentframe()
     try:
@@ -16,6 +23,7 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
         p_globals = globals_
         # this is documented eval behavior
         p_locals = p_globals if locals_ is None else locals_
+
     # AST manipulation and evaluation
     code_ast = ast.parse(code_str)
     assert isinstance(code_ast, ast.Module)

@@ -29,17 +29,24 @@ The Python support in Org-mode Babel provided by ~ob-python.el~ is somewhat lack
 Essentially, for better Python support in Org-mode Babel something like the Lisp ~progn~ function is needed in Python. This library tries to provide such a ~progn~ equivalent.
 
 * Implementation
-
-The main idea is to parse the AST of a a code block and determine if the last statement is an expression. If it is, the code preceding it is evaluated in ~exec~ mode and then this last expression is evaluated with ~eval~ and the result returned. Otwerwise, the whole block is simply evaluated in ~exec~ mode, which always returns ~None~.
-
-Additionally, the local and global variable scope in the calling frame is obtained to fully emulate a real ~eval~ call.
-
+The library uses the ~ast~ library for analyzing and manipulating the abstract syntax tree and the ~inspect~ library to capture the variable scope of the calling frame.
 #+BEGIN_SRC python :tangle block_eval.py
 import ast
 import inspect
-
-
+#+END_SRC
+The ~block_eval~ function has a similar signature to the standard ~eval~ function, optionally a block name can be specified which will be used as the ~filename~ argument in ~compile~ calls.
+#+BEGIN_SRC python :tangle block_eval.py
 def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
+    """Evaluate a code (block) string and possibly return its result
+
+    The result is the result of the last statement if it is an expression. This
+    function is a compromise between exec and eval: It evaluates all the
+    statements like exec, but uses eval for the last statement if it is an
+    expression and returns its value. If it is not, None is returned (exec mode)
+    """
+#+END_SRC
+The parent frame is searched for global and local variable scope to fully emulate ~eval~ and falls back to the current frame using the standard functions ~globals~ and ~locals~ which should always work.. This is perhaps the hackiest part of the code, but is needed.
+#+BEGIN_SRC python :tangle block_eval.py
     # get scope in calling frame to truly emulate eval
     current_frame = inspect.currentframe()
     try:
@@ -53,6 +60,10 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
         p_globals = globals_
         # this is documented eval behavior
         p_locals = p_globals if locals_ is None else locals_
+#+END_SRC
+
+Finally, the AST of the code block is parsed and it is determined if the last statement is an expression. If it is, the code preceding it is evaluated in ~exec~ mode and then this last expression is evaluated with ~eval~ and the result returned. Otwerwise, the whole block is simply evaluated in ~exec~ mode, which always returns ~None~.
+#+BEGIN_SRC python :tangle block_eval.py
     # AST manipulation and evaluation
     code_ast = ast.parse(code_str)
     assert isinstance(code_ast, ast.Module)
@@ -70,43 +81,54 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
 
 ** Test suite
 
-The ~block_eval~ function is first tested on simple expressions, some also referencing local variables. Then it is tested with more complicated expressions and then also block statements.
-
+, some also referencing local variables. Then it is tested with more complicated expressions and then also block statements.
 #+BEGIN_SRC python :tangle test_block_eval.py
 import unittest
+from textwrap import dedent
 
 from block_eval import block_eval
 
 class TestBlockEval(unittest.TestCase):
+#+END_SRC
 
+The ~block_eval~ function is first tested on a simple expression.
+#+BEGIN_SRC python :tangle test_block_eval.py
     def test_simple_expr(self):
         ret = block_eval("6 * 7")
         self.assertEqual(ret, 42)
-
+#+END_SRC
+Then the referencing of a local variable in a simple expression is tested.
+#+BEGIN_SRC python :tangle test_block_eval.py
     def test_simple_expr_with_var(self):
         a = 6
         ret = block_eval("a * 7")
         self.assertEqual(ret, 42)
-
+#+END_SRC
+Then a more complicated expression is tested.
+#+BEGIN_SRC python :tangle test_block_eval.py
     def test_complicated_expr(self):
         alpha = 1.0 / 137
         ret = block_eval("alpha.is_integer() is False")
         self.assertIs(ret, True)
-
+#+END_SRC
+A for loo block is tested, it should not return anything as the last statement is not an expression.
+#+BEGIN_SRC python :tangle test_block_eval.py
     def test_non_returning_block(self):
-        block = """for i in range(3):
-            i * 3
-        """
-        ret = block_eval(block)
-        self.assertIs(ret, None)
-
-    def test_returning_block(self):
-        ret = block_eval(
-        """f = 1
+        ret = block_eval(dedent("""
         for i in range(3):
-            s *= i
-        f * 2
-        """)
+            i * 3
+        """))
+        self.assertIs(ret, None)
+#+END_SRC
+This final block returns a result as the last statement is an expression. Referencing varibales defined in the block is also tested.
+#+BEGIN_SRC python :tangle test_block_eval.py
+    def test_returning_block(self):
+        ret = block_eval(dedent("""
+        f = 1
+        for i in range(3):
+            f *= i
+        f
+        """))
         self.assertEqual(f, 6)
         self.assertEqual(ret, f * 2)
 #+END_SRC
