@@ -6,8 +6,8 @@ This library uses only modules available in the standard library, namely
 - ~ast~ for analysis of the abstract syntax tree of the block to be evaluated
 - ~inspect~ for capturing variable scope in the calling frame to fully emulate ~eval~ behavior
 In some ways it is similar how IPython evaluates blocks of code. It can be also thought of as an equivalent of the ~progn~ function in Lisp.
-** Example
-In this example the factorial of 3 is calculated in a for loop.
+** Example in interactive mode
+In this example the factorial of 3 is calculated in a for loop. This shows how to execute blocks of code in interactive mode.
 #+BEGIN_EXAMPLE
 >>> block_eval("""
 ... f = 1
@@ -23,8 +23,12 @@ Note that
 - in normal interactive mode an empty line would have to follow after ~f *= 1~ to close the for loop
 - the value of f is returned since it is an expression as is the last statement in the block
 - the defined variables are later accessible as they are are evaluated in the current scope.
-** Caveats
-Because Python uses optimized fast access to local variables, they may not be updated during evaluation, see http://bugs.python.org/issue4831 for details. Therefore, the example above may not work in non-top-level scopes. Nevertheless, it should work in interactive interpreted mode as in the example.
+** Caveat and workaround/alternative approach in non-interactive mode
+Because Python uses optimized fast access to local variables, they may not be updated during evaluation, see http://bugs.python.org/issue4831 for details. Therefore, the example above may not work in non-top-level scopes (e.g. functions calling other functions), the ~f~ variable will not be defined after evaluation. Nevertheless, it should work in interactive interpreted mode as in the example.
+
+A workaround is to use the ~split_block~ function to split the code block into  ~expr~ and ~eval~ parts of the block as code objects, which can then be executed in the given order via ~eval~ in the given scope which will properly handle the local scope internally. For an example see the test suite.
+
+In some situations this approach of explicitly evaluating first the ~exec~ part and then the ~eval~ part may be even preferable, because it makes it possible to separate the side effects (e.g. printing output) of the ~expr~ part from the ~eval~ part.
 * Motivation
 The Python support in Org-mode Babel provided by ~ob-python.el~ is somewhat lacking, because Python returns the result of evaluating something only if it is an expression. Furthermore, only in interactive mode (which has limitations regarding continuation lines) is the result of the last printed expression available in the ~_~ variable. For this reason ~ob-python.el~ uses hacks like wrapping code in a function and requires ~return~ statements outside of seemingly function code. That leads to code blocks that cannot be simply tangled into a python file and various other issues. ~ob-ipython.el~ solves some of these issues by working with IPython which can evaluate blocks of code, but that requires extra libraries.
 
@@ -36,7 +40,36 @@ The library uses the ~ast~ library for analyzing and manipulating the abstract s
 import ast
 import inspect
 #+END_SRC
-The ~block_eval~ function has a similar signature to the standard ~eval~ function, optionally a block name can be specified which will be used as the ~filename~ argument in ~compile~ calls.
+For reasons that will become apparent later, it is useful to pre-compile an AST representing an Expression that evaluates to ~None~.
+#+BEGIN_SRC python :tangle block_eval.py
+_NONE_EXPRESSION = ast.Expression(ast.parse('None').body[0].value)
+#+END_SRC
+The main idea is to parse a code block string int an abstract syntax tree and determine if the last statement is an expression. If it is, the code preceding it is compiled in ~exec~ mode and then this last expression is compiled in ~eval~ mode so that its result can be returned. If either of these code parts are empty (e.g. if the last statement is not an expression or there are no preceding statements), they are compiled into code objects that just evaluate to ~None~ and won't do anything. ~block_name~ is the ~filename~ argument for ~compile~ calls. These two code objects are then returned and can be evaluated in the given order with ~eval~.
+#+BEGIN_SRC python :tangle block_eval.py
+def split_block(code_str, block_name='<string>'):
+    """Split a code (block) string into an exec and eval mode code objects
+
+    They are returned as a tuple (exec_part, eval_part). If the last statement
+    in the block is an expression, it is compiled in eval mode into a code
+    object eval_part. Remaining preceding statements are compiled in exec code
+    into a code object, If none remain, exec_part will be a void code object
+    (can be evaluated, but won't do anything). If the last statement is not an
+    expression, eval_part will a code object represetning an expression which
+    returns None (so effectively it is ignored as the exec_part would retunr
+    None anyways) and exec_part will be compiled in exec mode.
+    """
+    code_ast = ast.parse(code_str)
+    if len(code_ast.body) > 0 and isinstance(code_ast.body[-1], ast.Expr):
+        expr = ast.Expression(code_ast.body[-1].value)
+        del code_ast.body[-1]   # may become empty (void) code
+    else:
+        expr = _NONE_EXPRESSION # just evaluates to None
+    eval_part = compile(expr, block_name, 'eval')
+    exec_part = compile(code_ast, block_name, 'exec')
+    return exec_part, eval_part
+#+END_SRC
+
+For convenience the ~block_eval~ function with a similar signature to the standard ~eval~ function is provided. However, it works reliably only in a top-elvel scope, e.g. in the interactive interpreter. The ~block_name~ argument is passed on to ~split_block~.
 #+BEGIN_SRC python :tangle block_eval.py
 def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
     """Evaluate a code (block) string and possibly return its result
@@ -45,9 +78,14 @@ def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
     function is a compromise between exec and eval: It evaluates all the
     statements like exec, but uses eval for the last statement if it is an
     expression and returns its value. If it is not, None is returned (exec mode)
+
+    To emaulate eval behavior, the variable scope of the parent frame is
+    captured and modified, which is know to work reliably only in top-level
+    scope (e.g. interactive intepreter mode). It may not update local variable
+    scope when used in a lower level scope (functions calling other functions).
     """
 #+END_SRC
-The parent frame is searched for global and local variable scope to fully emulate ~eval~ and falls back to the current frame using the standard functions ~globals~ and ~locals~ which should always work.. This is perhaps the hackiest part of the code, but is needed.
+The parent frame is searched for global and local variable scope to fully emulate ~eval~ and falls back to the current frame using the standard functions ~globals~ and ~locals~ which should always work. This is perhaps the hackiest part of the code, but is needed.
 #+BEGIN_SRC python :tangle block_eval.py
     # get scope in calling frame to truly emulate eval
     current_frame = inspect.currentframe()
@@ -64,31 +102,21 @@ The parent frame is searched for global and local variable scope to fully emulat
         p_locals = p_globals if locals_ is None else locals_
 #+END_SRC
 
-Finally, the AST of the code block is parsed and it is determined if the last statement is an expression. If it is, the code preceding it is evaluated in ~exec~ mode and then this last expression is evaluated with ~eval~ and the result returned. Otwerwise, the whole block is simply evaluated in ~exec~ mode, which always returns ~None~.
+Finally, the AST of the code block is parsed and split into an ~exec~ and ~eval~ mode part using ~split_block~. These parts are then evaluated in the captured scope and the result of the ~eval~ part is returned.
 #+BEGIN_SRC python :tangle block_eval.py
-    # AST manipulation and evaluation
-    code_ast = ast.parse(code_str)
-    assert isinstance(code_ast, ast.Module)
-    last_stmt = code_ast.body[-1]
-    if isinstance(last_stmt, ast.Expr):
-        del code_ast.body[-1]
-        if len(code_ast.body) > 0:
-            eval(compile(code_ast, block_name, 'exec'), p_globals, p_locals)
-        expr = ast.Expression(last_stmt.value)
-        final_code = compile(expr, block_name, 'eval')
-    else:
-        final_code = compile(code_ast, block_name, 'exec')
-    return eval(final_code, p_globals, p_locals)
+    # parse and split block, then evaluate
+    exec_part, eval_part = split_block(code_str, block_name)
+    exec(exec_part, p_globals, p_locals)
+    return eval(eval_part, p_globals, p_locals)
 #+END_SRC
 
 ** Test suite
 
-, some also referencing local variables. Then it is tested with more complicated expressions and then also block statements.
 #+BEGIN_SRC python :tangle test_block_eval.py
 import unittest
 from textwrap import dedent
 
-from block_eval import block_eval
+from block_eval import split_block, block_eval
 
 class TestBlockEval(unittest.TestCase):
 #+END_SRC
@@ -113,7 +141,7 @@ Then a more complicated expression is tested.
         ret = block_eval("alpha.is_integer() is False")
         self.assertIs(ret, True)
 #+END_SRC
-A for loo block is tested, it should not return anything as the last statement is not an expression.
+A for loop block is tested, it should not return anything as the last statement is not an expression.
 #+BEGIN_SRC python :tangle test_block_eval.py
     def test_non_returning_block(self):
         ret = block_eval(dedent("""
@@ -122,7 +150,7 @@ A for loo block is tested, it should not return anything as the last statement i
         """))
         self.assertIs(ret, None)
 #+END_SRC
-This final block returns a result as the last statement is an expression.
+This more complicated block returns a result as the last statement is an expression.
 #+BEGIN_SRC python :tangle test_block_eval.py
     def test_returning_block(self):
         ret = block_eval(dedent("""
@@ -133,3 +161,27 @@ This final block returns a result as the last statement is an expression.
         """))
         self.assertEqual(ret, 6)
 #+END_SRC
+Due to local scope caveats the local variables likely won't be updated (oddly enough when the error is inspected with =nosetests --pdb= they will suddenly appear, probably due to interactive mode).
+#+BEGIN_SRC python :tangle test_block_eval.py
+    def test_locals_update_fails(self):
+        block_eval('b = 42')
+        with self.assertRaises(NameError):
+            self.assertEqual(b, 42)
+#+END_SRC
+Nevertheless, the proposed workaround works reliably.
+#+BEGIN_SRC python :tangle test_block_eval.py
+    def test_eval_in_current_scope_workaround(self):
+        a = 1
+        exec_part, eval_part = split_block(dedent("""
+        f = a
+        for i in range(1, 3+1):
+            f *= i
+        f / a
+        """))
+        exec(exec_part)
+        ret = eval(eval_part)
+
+        self.assertEqual(ret, 6)
+        self.assertEqual(f, ret)
+#+END_SRC
+

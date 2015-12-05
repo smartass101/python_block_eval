@@ -1,7 +1,7 @@
 import unittest
 from textwrap import dedent
 
-from block_eval import block_eval
+from block_eval import split_block, block_eval
 
 class TestBlockEval(unittest.TestCase):
 
@@ -34,3 +34,22 @@ class TestBlockEval(unittest.TestCase):
         f
         """))
         self.assertEqual(ret, 6)
+
+    def test_locals_update_fails(self):
+        block_eval('b = 42')
+        with self.assertRaises(NameError):
+            self.assertEqual(b, 42)
+
+    def test_eval_in_current_scope_workaround(self):
+        a = 1
+        exec_part, eval_part = split_block(dedent("""
+        f = a
+        for i in range(1, 3+1):
+            f *= i
+        f / a
+        """))
+        exec(exec_part)
+        ret = eval(eval_part)
+
+        self.assertEqual(ret, 6)
+        self.assertEqual(f, ret)
