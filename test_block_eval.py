@@ -29,9 +29,9 @@ class TestBlockEval(unittest.TestCase):
     def test_returning_block(self):
         ret = block_eval(dedent("""
         f = 1
-        for i in range(3):
+        for i in range(1, 3+1):
             f *= i
         f
         """))
-        self.assertEqual(f, 6)
-        self.assertEqual(ret, f * 2)
+        self.assertEqual(ret, 6)
+        self.assertEqual(f, ret)
