@@ -33,5 +33,6 @@ class TestBlockEval(unittest.TestCase):
             f *= i
         f
         """))
+        locals()
         self.assertEqual(ret, 6)
         self.assertEqual(f, ret)
