@@ -23,6 +23,8 @@ Note that
 - in normal interactive mode an empty line would have to follow after ~f *= 1~ to close the for loop
 - the value of f is returned since it is an expression as is the last statement in the block
 - the defined variables are later accessible as they are are evaluated in the current scope.
+** Caveats
+Because Python uses optimized fast access to local variables, they may not be updated during evaluation, see http://bugs.python.org/issue4831 for details. Therefore, the example above may not work in non-top-level scopes. Nevertheless, it should work in interactive interpreted mode as in the example.
 * Motivation
 The Python support in Org-mode Babel provided by ~ob-python.el~ is somewhat lacking, because Python returns the result of evaluating something only if it is an expression. Furthermore, only in interactive mode (which has limitations regarding continuation lines) is the result of the last printed expression available in the ~_~ variable. For this reason ~ob-python.el~ uses hacks like wrapping code in a function and requires ~return~ statements outside of seemingly function code. That leads to code blocks that cannot be simply tangled into a python file and various other issues. ~ob-ipython.el~ solves some of these issues by working with IPython which can evaluate blocks of code, but that requires extra libraries.
 
@@ -120,7 +122,7 @@ A for loo block is tested, it should not return anything as the last statement i
         """))
         self.assertIs(ret, None)
 #+END_SRC
-This final block returns a result as the last statement is an expression. Referencing varibales defined in the block is also tested.
+This final block returns a result as the last statement is an expression.
 #+BEGIN_SRC python :tangle test_block_eval.py
     def test_returning_block(self):
         ret = block_eval(dedent("""
@@ -130,5 +132,4 @@ This final block returns a result as the last statement is an expression. Refere
         f
         """))
         self.assertEqual(ret, 6)
-        self.assertEqual(f, ret)
 #+END_SRC

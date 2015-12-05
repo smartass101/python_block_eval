@@ -34,4 +34,3 @@ class TestBlockEval(unittest.TestCase):
         f
         """))
         self.assertEqual(ret, 6)
-        self.assertEqual(f, ret)
