@@ -1,0 +1,112 @@
+* Python resultant block evaluation 
+This Python library provides the ~block_eval~ function which is similar to the the standard ~eval~ function, but
+- can handle multiple statements like the ~exec~ call
+- returns the result of the last statement if it is an expression
+This library uses only modules available in the standard library, namely
+- ~ast~ for analysis of the abstract syntax tree of the block to be evaluated
+- ~inspect~ for capturing variable scope in the calling frame to fully emulate ~eval~ behavior
+In some ways it is similar how IPython evaluates blocks of code. It can be also thought of as an equivalent of the ~progn~ function in Lisp.
+** Example
+In this example the factorial of 3 is calculated in a for loop.
+#+BEGIN_EXAMPLE
+>>> block_eval("""
+... f = 1
+... for i in range(1, 3+1):
+...     f *= i
+... f
+... """)
+6
+>>> f * 2
+12
+#+END_EXAMPLE
+Note that
+- in normal interactive mode an empty line would have to follow after ~f *= 1~ to close the for loop
+- the value of f is returned since it is an expression as is the last statement in the block
+- the defined variables are later accessible as they are are evaluated in the current scope.
+* Motivation
+The Python support in Org-mode Babel provided by ~ob-python.el~ is somewhat lacking, because Python returns the result of evaluating something only if it is an expression. Furthermore, only in interactive mode (which has limitations regarding continuation lines) is the result of the last printed expression available in the ~_~ variable. For this reason ~ob-python.el~ uses hacks like wrapping code in a function and requires ~return~ statements outside of seemingly function code. That leads to code blocks that cannot be simply tangled into a python file and various other issues. ~ob-ipython.el~ solves some of these issues by working with IPython which can evaluate blocks of code, but that requires extra libraries.
+
+Essentially, for better Python support in Org-mode Babel something like the Lisp ~progn~ function is needed in Python. This library tries to provide such a ~progn~ equivalent.
+
+* Implementation
+
+The main idea is to parse the AST of a a code block and determine if the last statement is an expression. If it is, the code preceding it is evaluated in ~exec~ mode and then this last expression is evaluated with ~eval~ and the result returned. Otwerwise, the whole block is simply evaluated in ~exec~ mode, which always returns ~None~.
+
+Additionally, the local and global variable scope in the calling frame is obtained to fully emulate a real ~eval~ call.
+
+#+BEGIN_SRC python :tangle block_eval.py
+import ast
+import inspect
+
+
+def block_eval(code_str, globals_=None, locals_=None, block_name='<string>'):
+    # get scope in calling frame to truly emulate eval
+    current_frame = inspect.currentframe()
+    try:
+        parent_frame = current_frame.f_back
+        p_globals, p_locals = parent_frame.f_globals, parent_frame.f_locals
+    except AttributeError:      # cannot get that frame or its vars
+        p_globals, p_locals = locals(), globals() # these should always work
+    finally:
+        del current_frame       # otherwise might create reference cycle
+    if globals_ is not None:
+        p_globals = globals_
+        # this is documented eval behavior
+        p_locals = p_globals if locals_ is None else locals_
+    # AST manipulation and evaluation
+    code_ast = ast.parse(code_str)
+    assert isinstance(code_ast, ast.Module)
+    last_stmt = code_ast.body[-1]
+    if isinstance(last_stmt, ast.Expr):
+        del code_ast.body[-1]
+        if len(code_ast.body) > 0:
+            eval(compile(code_ast, block_name, 'exec'), p_globals, p_locals)
+        expr = ast.Expression(last_stmt.value)
+        final_code = compile(expr, block_name, 'eval')
+    else:
+        final_code = compile(code_ast, block_name, 'exec')
+    return eval(final_code, p_globals, p_locals)
+#+END_SRC
+
+** Test suite
+
+The ~block_eval~ function is first tested on simple expressions, some also referencing local variables. Then it is tested with more complicated expressions and then also block statements.
+
+#+BEGIN_SRC python :tangle test_block_eval.py
+import unittest
+
+from block_eval import block_eval
+
+class TestBlockEval(unittest.TestCase):
+
+    def test_simple_expr(self):
+        ret = block_eval("6 * 7")
+        self.assertEqual(ret, 42)
+
+    def test_simple_expr_with_var(self):
+        a = 6
+        ret = block_eval("a * 7")
+        self.assertEqual(ret, 42)
+
+    def test_complicated_expr(self):
+        alpha = 1.0 / 137
+        ret = block_eval("alpha.is_integer() is False")
+        self.assertIs(ret, True)
+
+    def test_non_returning_block(self):
+        block = """for i in range(3):
+            i * 3
+        """
+        ret = block_eval(block)
+        self.assertIs(ret, None)
+
+    def test_returning_block(self):
+        ret = block_eval(
+        """f = 1
+        for i in range(3):
+            s *= i
+        f * 2
+        """)
+        self.assertEqual(f, 6)
+        self.assertEqual(ret, f * 2)
+#+END_SRC
